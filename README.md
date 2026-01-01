@@ -32,4 +32,52 @@ Cơ chế hoạt động: nó sẽ cần 3 thứ
 
 - Các hành động trong ứng dụng mà kẻ tấn công muốn thực hiện ( ví dụ đổi password , đổi email , cấp quyền admin , ... )
 - Quản lí phiên bằng Cookie : ứng dụng chỉ dựa vào phiên ( session ) để xác nhận danh tính người dùng . Trình duyệt có cơ chế tự động gửi cookie này kèm theo mọi yêu cầu đến trang web đó
-- Cuối cùng cần phải biết cái tham số tương ứng với mỗi hành động cần thực hiện ( như lúc nãy , cái tham số cần truyền vào để có thể đổi email đó chính là `email` ) 
+- Cuối cùng cần phải biết cái tham số tương ứng với mỗi hành động cần thực hiện ( như lúc nãy , cái tham số cần truyền vào để có thể đổi email đó chính là `email` )
+
+***KHAI THÁC***
+Thứ nhất là vượt qua mã CSRF 
+
+Nói dễ hiểu , mã thông báo CSRF là 1 loại mã ngẫu nhiên tạo ra bởi máy chủ và đău cho máy khách , để thực hiện một hành động nhạy cảm như đổi mật khẩu thì phía Client phải gửi kèm theo mã CSRF đó đến máy chủ 
+
+Hãy phân biệt rõ 2 loại hành động , giả sử chúng ta đang ở `https://facebook.com`
+Hành động XEM ( GET request ) :
+- ví dụ : đọc , lướt , xem post , xem profile , tìm kiếm thông tin 
+- không cần CSRF Token bởi vì bạn chỉ nhìn thôi chứ ko thay đổi gì trong database của server cả
+
+Hành động LÀM ( POST request ) : 
+- ví dụ : Đổi mật khẩu , Comment , Like , đăng bài viết , ....
+- tất cả những hành động trên đều làm thay đổi dữ liệu nên đều cần CSRF Token 
+ví dụ như trên: khi mình click vào nút Like một post của trên Fb thì có 1 request gửi lên Server bao gồm cả mã CSRF
+ở đây mã CSRF là cái dòng fb_dtsg kia
+<img width="975" height="315" alt="image" src="https://github.com/user-attachments/assets/73fd61d9-6aab-4bca-b886-43a1026f3c89" />
+
+
+
+Ví dụ từ portswigger:
+```html
+<form name="change-email-form" action="/my-account/change-email" method="POST">
+    <label>Email</label>
+    <input required type="email" name="email" value="example@normal-website.com">
+    <input required type="hidden" name="csrf" value="50FaWgdOhi9M9wyna8taR1k3ODOR8d6u">
+    <button class='button' type='submit'> Update email </button>
+</form>
+```
+đoạn code trên mô tả cách SERVER gửi mã CSRF cho CLIENT của người dùng 
+- Trong thẻ <form> để đổi email, ngoài trường nhập email bình thường thì hệ thống chèn thêm một dòng 
+`<input required type="hidden" name="csrf" value="50FaWgdOhi9M9wyna8taR1k3ODOR8d6u">`
+`type="hidden"`: người dùng sẽ không nhìn thấy dòng này trên giao diện web, nó chạy ngầm  
+`value="50FaWgdOhi9M9wyna8taR1k3ODOR8d6u">`: đây mã CSRF ngẫu nhiên , mã này chỉ có tác dụng đối với phiên hoạt động hiện tại. Chỉ máy chủ và trình duyệt của bạn mới biết được đoạn mã random này 
+
+và giả sử khi mà người dùng nhấn vào nút UPDATE EMAIL trình duyệt sẽ gửi một request POST lên SERVER 
+(cre: portswigger) 
+```
+POST /my-account/change-email HTTP/1.1
+Host: normal-website.com
+Content-Length: 70
+Content-Type: application/x-www-form-urlencoded
+
+csrf=50FaWgdOhi9M9wyna8taR1k3ODOR8d6u&email=example@normal-website.com
+```
+như bạn đã thấy đó dữ liệu được gửi đi bao gồm cả email mới cần thay và mã CSRF 
+
+
