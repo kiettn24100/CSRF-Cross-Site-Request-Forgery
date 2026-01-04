@@ -292,6 +292,99 @@ Thế là Cookie đã được set , sau đó nó chạy đến img.onerror và 
 
 Có một đoạn khó hiểu ở đây là , vậy thế thì lỡ có 2 cookie xung đột ở đây thì sao ? Tức là khi người dùng ấn vào link thì request nó cũng sẽ bao gồm Cookie của người dùng . Và tất nhiên , cái Set-Cookie: kia nó sẽ ghi đè lên cookie của người dùng nên bạn không cần lo chuyện này .
 
+# 2. Vượt qua các hạn chế của cookie SameSite
+
+**Đầu tiên , cùng làm rõ "Site" là gì ?**
+
+ Công thức của Site: Site = TLD + 1
+
+ - TLD (Top-Level-Domain): Là phần đuôi mở rộng của tên miền như `.com` , `.net` , `.org`
+ - TLD + 1: Là TLD cộng thêm một cấp tên miền ngay trước nó . Đây thường là tên miền chính , bạn thường bỏ tiền ra mua 
+ - Ví dụ : nếu URL là `https://www.google.com thì **TLD** là `.com` và **Site** là `google.com`
+ - Nếu URL là `https://maps.google.com` thì **TLD** là `.com` và **Site** vẫn là `google.com` , `maps` là subdomain ( tên miền phụ ) 
+
+**Sự khác biệt giữa Site và Origin:**
+
+ - Origin (Nguồn gốc): Hai URL phải giống nhau về 3 yếu tố: Giao thức (Scheme), Tên miền đầy đủ (Hostname) và Cổng (Port)
+ - Site (Trang): Chỉ cần giống nhau về Giao thức + Site (TLD + 1)
+
+**Để tìm hiểu lỗ hổng CSRF , bạn cần biết hai "người bảo vệ" của trình duyệt là SOP và SameSite .Chúng bảo vệ hai thứ khác nhau:**
+
+ - SOP (Same Origin Policy): Bảo vệ dữ liệu (chống đọc trộm). Giả sử bạn đang ở `blog.media.com` (chứa lỗ hổng XSS) và muốn nhìn trộm số dư tài khoản ở trang `bank.media.com` .SOP sẽ so sánh 2 Origin. Thấy khác nhau -> SOP dựng lên 1 tường lên. Mã độc bên `blog` không thể đọc được số dư , tin nhắn, không lấy được nội dung từ `bank.media.com`
+ - SameSite: Giả sử bạn đang ở `blog.media.com` , tuy không thấy gì ở `bank.media.com` nhưng bạn có thể thực hiện gửi lệnh chuyển tiền sang `bank.media.com` . Trình duyệt kiểm tra thấy cùng Site `media.com` -> Trình duyệt cho phép gửi request kèm Cookie đăng nhập. Vấn đề là Server `bank` nhận được Request mà có Cookie tưởng bạn gửi cho nên thực hiện chuyển tiền theo Request
+
+Nói tóm lại thì SOP nó chặn không cho hacker nhìn thấy dữ liệu của bạn nhưng nó lại không chặn việc hacker gửi Request thay bạn (mặc dù đó không phải là hành động của bạn làm)
+
+Chính vì SOP lờ đi việc gửi Request, nên kẻ tấn công mới lợi dụng lỗ hổng này thực hiện CSRF (gửi yêu cầu giả mạo). Và lúc đó chúng ta mới cần SameSite thật chặt chẽ để vá lại cái lỗ hổng SOP bỏ sót
+
+**Vậy thì SameSite hoạt động như thế nào ?**
+
+Nói dễ hiểu thì nó giống như một bộ lọc trước khi Request được gửi đi , nó sẽ quyết định việc có được gửi Cookie đi kèm theo Request hay không ?
+
+Bạn hình dung là , trước mỗi lần gửi Request , SameSite sẽ giúp trình duyệt tự hỏi rằng: "Request này có phải là Cross-Site (chéo trang) hay không ?"
+
+ - Nếu **KHÔNG** (bạn đang ở `bank.com` và gửi Request đến `bank.com`) , thì Request được gửi đi luôn được kèm với Cookie.
+
+ - Nếu **CÓ** (bạn đang ở `blog.com` và gửi Request đến `bank.com`) , Nó sẽ dựa vào các tùy chọn được thiết lập cho SameSite để quyết định.
+
+Có 3 Level chính của SameSite:
+
+&nbsp; 1. `SameSite=Strict` (đây là options chặt chẽ nhất, an toàn nhất nhưng cũng gây phiền nhất)
+
+&nbsp; - Quy tắc: trình duyệt chặn mọi Request chéo trang , bất kể là loại Request gì
+
+&nbsp - Ví dụ: Bạn đang lướt `facebook.com` rồi bấm vào link `Instagram.com` , mặc dù trước đó bạn đã đăng nhập `Instagram.com` rồi nhưng mà nhưng bây giờ vẫn phải đăng nhập lại, do trình duyệt nó không gửi Request kèm với Cookie
+
+&nbsp; - Tác dụng: Chặn hoàn toàn CSRF nhưng cứ mỗi lần bạn ở `Facebook.com` mà muốn qua `Instagram.com` thì lại phải đăng nhập lại từ đầu rất phiền phức.
+
+&nbsp; 2. `SameSite=Lax` (lỏng lẻo - mức mặc định của Chrome)
+
+&nbsp; - Đây là mức cân bằng giữa bảo mật và trải nghiệm, cũng là mức độ SameSite mà chúng ta sẽ thảo luận và trọng tâm của các kỹ thuật Bypass
+
+&nbsp; - Quy tắc: trình duyệt sẽ chặn Cookie trong hầu hết các trường hợp chéo trang trừ những trường hợp thỏa mãn 2 điều kiện sau đây:
+
+&nbsp; - Điều kiện thứ nhất: Request sử dụng phương thức GET và Điều kiện thứ hai: Request đó phải là Top-Level-Navigation (Thay đổi URL trên thanh địa chỉ)
+
+&nbsp; - Ví dụ dễ hiểu như: chúng ta đang ở trong `blog.com` vốn dĩ chỉ có đọc và lướt blog , nhưng hacker đã chèn thêm 1 dòng `<img src="http://bank.com/transfer?amount=1000">`
+
+Bình thường `<img src="http://nguon_anh_mot_con_me0">` thì đây không chỉ là dòng lệnh hiển thị ảnh mà nó đã gửi 1 Request đến Server để yêu cầu server đưa cho trang web hình ảnh con mèo để hiển thị 
+
+Và cũng tương tự như thế , nếu hacker thay hiển thị ảnh bằng `<img src="http://bank.com/transfer?amount=1000">` thì trình duyệt cũng sẽ gửi 1 request lên server . Để hiểu rõ hơn thì Request nó gửi lên sẽ có dạng thế này:
+```
+GET /transfer?amount=1000 HTTP/1.1
+Host: bank.com
+Cookie: session_id=abcxyz      (có hoặc ko có tùy theo options SameSite)
+Referer: http://blog.com
+Accept: image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8
+User-Agent: Mozilla/5.0
+Connection: keep-alive
+```
+Vì dùng thẻ `<img>` nên trình duyệt bắt buộc phải dùng `GET` , vậy là thỏa mãn điều kiện đầu tiên , tiếp tục ở đây `SameSite=Lax` , nếu mà cái Request gửi lên nó không làm thay đổi URL trên thanh địa chỉ tức là nó đang chạy ngầm trong trình duyệt , thì lúc này cái Request gửi lên đó nó sẽ không bao gồm Cookie. Bạn hình dung cái điều kiện thứ 2: Top-Level-Navigation nó giống như việc bạn đang ở `facebook.com` mà bạn click vào 1 link `ins.com` thì lúc này sẽ chuyển hướng cả URL trên thanh địa chỉ của bạn từ `facebook.com` sang `ins.com` , chỉ khi thỏa mãn thêm điều kiện này thì Cookie mới được bao gồm ở trong Request.
+
+Để giải thích thêm đoạn này . Giả sử bây giờ Hacker muốn thực hiện 1 hành động chuyển tiền trên tài khoản của bạn thì cái cần thiết là phải có Cookie của bạn đúng chứ ? Vậy thì việc mà Request được gửi đi mà không bao gồm Cookie thì cái Request cũng sẽ trở nên vô nghĩa, Hacker sẽ phải đăng nhập . 
+
+Dòng `Accept: image` dấu hiệu đặc trưng của thẻ `<img>` , tức là trình duyệt đang đợi Server sẽ trả về dữ liệu định dạng **ẢNH** , nhưng điểm mấu chốt ở đây là SERVER nó nhìn thấy lệnh đến `/transfer` cho nên nó sẽ thực hiện chuyển tiền trước , còn sau khi thực hiện lệnh xong kết quả như nào thì sẽ trả về theo ảnh hay theo text thì tính sau.
+
+Thêm nữa, dòng `Referer: http://blog.com` cho biết Request này xuất phát từ web nào 
+
+&nbsp; 3. `SameSite=None` 
+
+&nbsp; - Quy tắc: Trình duyệt luôn gửi Cookie trong mọi Request bất kể trường hợp nào , Cùng Site hay khác Site, bất kể là POST hay GET. Và bắt buộc bật thêm cờ `Secure` (tức là chỉ được gửi qua HTTPS). Điều này là bắt buộc , nó giống như một quy luật bắt buộc (có thể hiểu như là một bộ luật được đưa ra phải chấp hành nếu bạn dùng `None`) 
+
+Giả sử khi bạn vào `Facebook.com` thì sẽ có 1 response trả về từ Server Facebook và có dòng `Set-Cookie: session_id=xyz; SameSite=None` thiếu chữ `Secure` . Trình duyệt nhận được gói tin , đọc thấy `SameSite=None` mà không có cờ `Secure` , Trình duyệt sẽ ngay lập tức vứt bỏ Cookie này , Nó sẽ hiển thị một thông báo vàng hoặc đỏ trong tab Console của F12 `***Wait! This cookie was blocked because it has the 'SameSite=None' attribute but is missing the 'Secure' attribute.***`
+
+&nbsp; - Ứng dụng của `SameSite=None`: Dùng cho các dịch vụ muốn hoạt động ngầm bên trong trang Web (như là nút Like Facebook ,...) , Nếu không để `None` thì tính năng đó sẽ bị lỗi (ví dụ nút Like Facebook sẽ không hiện ra thông báo đã Like)
+
+# **Cách vượt qua `SameSite`**
+
+**1. Vượt qua `SameSite Lax` bằng cách ghi đè phương thức**
+
+&nbsp; Vấn đề: Bạn muốn tấn công CSRF để đổi email của nạn nhân. Nhưng Server yêu cầu phương thức POST để đổi email (chuẩn bảo mật hiện nay). Trình duyệt (nạn nhân) đang dùng `SameSite=Lax` . Nó chặn Cookie nếu bạn gửi POST từ trang khác và cho phép Cookie nếu là GET
+
+&nbsp; Gửi `POST` thì trình duyệt nó mới chịu xử lý nhưng mà không có Cookie đi kèm -> Failed . Gửi `GET` thì SERVER lại lỗi ***405 METHOD NOT ALLOWED***
+
+&nbsp; Giải pháp ở đây là dùng kỹ thuật **"Method Override"**: Bạn cứ hiểu rằng 
+
 	
 
 
